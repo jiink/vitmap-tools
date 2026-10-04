@@ -352,7 +352,6 @@ class Shape {
     constructor() {
         this.points = []; 
         this.color = { r: 0, g: 170, b: 255, a: 255 };
-        this.closed = true;
         this.borderWidth = 0;
         this.borderColor = { r: 255, g: 255, b: 255 };
         this.open = false;
@@ -491,6 +490,10 @@ const project = {
                 const data = JSON.parse(e.target.result);
                 if (data.actions) {
                     this.actions = data.actions;
+                    this.actions.forEach(action => action.frames.forEach(frame => frame.shapes.forEach(shape => {
+                        if (shape.open === undefined) shape.open = shape.closed === false;
+                        delete shape.closed;
+                    })));
                     this.currentActionIndex = 0;
                     editor.currentFrameIndex = 0;
                     editor.selectedShapes = []; // UPDATED
@@ -899,7 +902,7 @@ const editor = {
             ctx.lineTo(p.x, p.y);
         }
         const isOpen = !!shape.open;
-        if (shape.closed && !isOpen) ctx.closePath();
+        if (!isOpen) ctx.closePath();
         const c = shape.color;
         ctx.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255) * alphaMult})`;
         if (!isOpen && !isOutline) ctx.fill();
@@ -922,7 +925,7 @@ const editor = {
                 const p = this.worldToScreen(shape.points[i].x, shape.points[i].y);
                 ctx.lineTo(p.x, p.y);
             }
-            if (shape.closed && !shape.open) ctx.closePath();
+            if (!shape.open) ctx.closePath();
             ctx.strokeStyle = "#00aaff"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
         }
         if (showPoints) {
@@ -1013,7 +1016,6 @@ canvas.addEventListener('mousedown', (e) => {
         if (e.button === 0) { 
             if (!editor.drawingShape) {
                 editor.drawingShape = new Shape();
-                editor.drawingShape.closed = false; 
                 editor.drawingShape.points.push(snapPos);
                 const hex = document.getElementById('color-picker').value;
                 const rgb = hexToRgb(hex);
@@ -1026,7 +1028,6 @@ canvas.addEventListener('mousedown', (e) => {
             } else {
                 const startPt = editor.drawingShape.points[0];
                 if (editor.drawingShape.points.length >= 2 && snapPos.x === startPt.x && snapPos.y === startPt.y) {
-                    editor.drawingShape.closed = !editor.drawingShape.open;
                     project.getCurrentFrame().shapes.push(editor.drawingShape);
                     editor.selectedShapes = [editor.drawingShape];
                     editor.drawingShape = null; 
