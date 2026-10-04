@@ -246,6 +246,18 @@
                 <label>Alpha</label>
                 <input type="range" id="alpha-slider" min="0" max="255" value="255" oninput="editor.setAlpha(this.value)">
             </div>
+            <div class="row">
+                <label for="border-width">Border width</label>
+                <input type="number" id="border-width" min="0" step="0.1" value="0" oninput="editor.setBorderWidth(this.value)">
+            </div>
+            <div class="row">
+                <label for="border-color">Border color</label>
+                <input type="color" id="border-color" value="#ffffff" oninput="editor.setBorderColor(this.value)">
+            </div>
+            <div class="row">
+                <input type="checkbox" id="shape-open" onchange="editor.setOpen(this.checked)">
+                <label for="shape-open">Open (border only)</label>
+            </div>
 
             <div class="panel-header" style="margin: 10px -10px 10px -10px;">Grid</div>
             
@@ -341,6 +353,9 @@ class Shape {
         this.points = []; 
         this.color = { r: 0, g: 170, b: 255, a: 255 };
         this.closed = true;
+        this.borderWidth = 0;
+        this.borderColor = { r: 255, g: 255, b: 255 };
+        this.open = false;
     }
 }
 class Frame { constructor() { this.shapes = []; } }
@@ -363,7 +378,7 @@ const project = {
     isDirty: false,
     
     init() {
-        this.actions = [new Action("Idle")];
+        this.actions = [new Action("Default")];
         this.currentActionIndex = 0;
         this.isDirty = false;
         this.refreshUI();
@@ -539,6 +554,7 @@ refreshUI() {
         const layerList = document.getElementById('layer-list');
         layerList.innerHTML = '';
         const currentFrame = this.getCurrentFrame();
+        editor.syncPropertyInputs();
         [...currentFrame.shapes].reverse().forEach((shape, revIdx) => {
             const realIdx = currentFrame.shapes.length - 1 - revIdx;
             const div = document.createElement('div');
@@ -605,6 +621,9 @@ const editor = {
     dragStart: { x: 0, y: 0 },
     mouseWorld: { x: 0, y: 0 },
     drawingShape: null,
+    borderWidth: 0,
+    borderColor: { r: 255, g: 255, b: 255 },
+    open: false,
 
     init() {
         this.resize();
@@ -623,10 +642,18 @@ const editor = {
     setTool(t) {
         this.tool = t;
         if (t === 'draw') {
+            if (this.selectedShapes.length === 1) {
+                const shape = this.selectedShapes[0];
+                this.borderWidth = shape.borderWidth ?? 0;
+                const color = shape.borderColor || shape.color;
+                this.borderColor = { r: color.r, g: color.g, b: color.b };
+                this.open = !!shape.open;
+            }
             this.selectedShapes = [];
             this.selectedPointIndex = -1;
         }
         this.updateButtonStates();
+        this.syncPropertyInputs();
         this.render();
     },
 
@@ -657,6 +684,48 @@ const editor = {
             project.isDirty = true;
             this.render();
             project.refreshUI(); 
+        }
+    },
+
+    syncPropertyInputs() {
+        const shape = this.selectedShapes.length === 1 ? this.selectedShapes[0] : null;
+        const width = shape ? (shape.borderWidth ?? 0) : this.borderWidth;
+        const color = shape ? (shape.borderColor || shape.color) : this.borderColor;
+        document.getElementById('border-width').value = width;
+        document.getElementById('border-color').value = rgbToHex(color.r, color.g, color.b);
+        document.getElementById('shape-open').checked = shape ? !!shape.open : this.open;
+    },
+
+    setBorderWidth(value) {
+        const width = Math.max(0, Number(value) || 0);
+        if (this.tool === 'select' && this.selectedShapes.length > 0) {
+            this.selectedShapes.forEach(shape => shape.borderWidth = width);
+            project.isDirty = true;
+            this.render();
+        } else {
+            this.borderWidth = width;
+        }
+    },
+
+    setBorderColor(hex) {
+        const rgb = hexToRgb(hex);
+        const color = { r: rgb.r, g: rgb.g, b: rgb.b };
+        if (this.tool === 'select' && this.selectedShapes.length > 0) {
+            this.selectedShapes.forEach(shape => shape.borderColor = { ...color });
+            project.isDirty = true;
+            this.render();
+        } else {
+            this.borderColor = color;
+        }
+    },
+
+    setOpen(open) {
+        if (this.tool === 'select' && this.selectedShapes.length > 0) {
+            this.selectedShapes.forEach(shape => shape.open = open);
+            project.isDirty = true;
+            this.render();
+        } else {
+            this.open = open;
         }
     },
 
@@ -829,11 +898,19 @@ const editor = {
             const p = this.worldToScreen(shape.points[i].x, shape.points[i].y);
             ctx.lineTo(p.x, p.y);
         }
-        if (shape.closed) ctx.closePath();
+        const isOpen = !!shape.open;
+        if (shape.closed && !isOpen) ctx.closePath();
         const c = shape.color;
         ctx.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255) * alphaMult})`;
-        ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${alphaMult})`; 
-        if (!isOutline) { ctx.fill(); } else { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
+        if (!isOpen && !isOutline) ctx.fill();
+        const borderWidth = Math.max(0, Number(shape.borderWidth) || 0);
+        if (borderWidth > 0) {
+            const border = shape.borderColor || c;
+            ctx.strokeStyle = `rgba(${border.r},${border.g},${border.b},${alphaMult})`;
+            ctx.lineWidth = borderWidth * this.camera.zoom;
+            ctx.lineJoin = "round";
+            ctx.stroke();
+        }
     },
 
     drawSelectionUI(shape, showPoints) {
@@ -845,7 +922,7 @@ const editor = {
                 const p = this.worldToScreen(shape.points[i].x, shape.points[i].y);
                 ctx.lineTo(p.x, p.y);
             }
-            ctx.closePath();
+            if (shape.closed && !shape.open) ctx.closePath();
             ctx.strokeStyle = "#00aaff"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
         }
         if (showPoints) {
@@ -897,7 +974,7 @@ canvas.addEventListener('mousedown', (e) => {
         const frame = project.getCurrentFrame();
         let clickedShape = null;
         for (let i = frame.shapes.length - 1; i >= 0; i--) {
-            if (pointInPoly(worldPos, frame.shapes[i].points)) {
+            if (shapeHitTest(worldPos, frame.shapes[i], editor.camera.zoom)) {
                 clickedShape = frame.shapes[i];
                 break;
             }
@@ -942,10 +1019,14 @@ canvas.addEventListener('mousedown', (e) => {
                 const rgb = hexToRgb(hex);
                 const alpha = parseInt(document.getElementById('alpha-slider').value);
                 editor.drawingShape.color = { r: rgb.r, g: rgb.g, b: rgb.b, a: alpha };
+                editor.drawingShape.borderWidth = Math.max(0, Number(document.getElementById('border-width').value) || 0);
+                const borderRgb = hexToRgb(document.getElementById('border-color').value);
+                editor.drawingShape.borderColor = { r: borderRgb.r, g: borderRgb.g, b: borderRgb.b };
+                editor.drawingShape.open = document.getElementById('shape-open').checked;
             } else {
                 const startPt = editor.drawingShape.points[0];
                 if (editor.drawingShape.points.length >= 2 && snapPos.x === startPt.x && snapPos.y === startPt.y) {
-                    editor.drawingShape.closed = true;
+                    editor.drawingShape.closed = !editor.drawingShape.open;
                     project.getCurrentFrame().shapes.push(editor.drawingShape);
                     editor.selectedShapes = [editor.drawingShape];
                     editor.drawingShape = null; 
@@ -1104,6 +1185,19 @@ function pointInPoly(pt, vs) {
         if (intersect) inside = !inside;
     }
     return inside;
+}
+function shapeHitTest(pt, shape, zoom) {
+    if (!shape.open) return pointInPoly(pt, shape.points);
+    const pts = shape.points;
+    const threshold = Math.max(4 / zoom, (Number(shape.borderWidth) || 0) / 2);
+    for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const lengthSquared = dx * dx + dy * dy;
+        const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / lengthSquared));
+        if (Math.hypot(pt.x - (a.x + t * dx), pt.y - (a.y + t * dy)) <= threshold) return true;
+    }
+    return false;
 }
 
 window.onbeforeunload = (e) => { if (project.isDirty) { e.returnValue = "Unsaved changes"; return e.returnValue; } };
