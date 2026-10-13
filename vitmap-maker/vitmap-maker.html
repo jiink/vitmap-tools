@@ -37,6 +37,21 @@
             padding: 0 10px;
             border-bottom: 1px solid var(--border);
             justify-content: space-between;
+            position: relative;
+        }
+
+        #project-name {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(260px, 24vw);
+            text-align: center;
+            font-size: 13px;
+        }
+
+        @media (max-width: 900px) {
+            #toolbar > div:last-child { display: none; }
+            #project-name { width: min(200px, 25vw); }
         }
 
         #workspace {
@@ -169,6 +184,18 @@
             background: none;
         }
 
+        #color-picker {
+            flex: 0 0 38px;
+            width: 38px;
+            padding: 0;
+        }
+
+        #color-hex {
+            flex: 1;
+            min-width: 0;
+            text-transform: uppercase;
+        }
+
         /* Layer List */
         .layer-item {
             display: flex;
@@ -217,6 +244,8 @@
         <button onclick="document.getElementById('file-input').click()"><i class="fas fa-folder-open"></i> Load JSON</button>
         <input type="file" id="file-input" style="display:none" onchange="project.loadFromJSON(this)">
     </div>
+    <input type="text" id="project-name" aria-label="Vitmap name" placeholder="Vitmap name"
+        oninput="project.name = this.value; project.isDirty = true">
     <div style="font-size: 12px; color: #666;">
         Drag & Drop Image for Reference • Middle Click Pan • Scroll Zoom
     </div>
@@ -241,6 +270,9 @@
             <div class="row">
                 <label>Color</label>
                 <input type="color" id="color-picker" value="#00aaff" oninput="editor.setColor(this.value)">
+                <input type="text" id="color-hex" value="00AAFF" aria-label="Color hex value"
+                    placeholder="6D4746" maxlength="7" spellcheck="false"
+                    oninput="editor.setColor(this.value)">
             </div>
             <div class="row">
                 <label>Alpha</label>
@@ -374,11 +406,13 @@ const ctx = canvas.getContext('2d');
 const project = {
     actions: [],
     currentActionIndex: 0,
+    name: "animation",
     isDirty: false,
     
     init() {
         this.actions = [new Action("Default")];
         this.currentActionIndex = 0;
+        document.getElementById('project-name').value = this.name;
         this.isDirty = false;
         this.refreshUI();
     },
@@ -434,7 +468,6 @@ const project = {
         }
     },
 
-
     addFrame() {
         this.getCurrentAction().frames.push(new Frame());
         editor.currentFrameIndex = this.getCurrentAction().frames.length - 1;
@@ -472,11 +505,14 @@ const project = {
     },
 
     saveToJSON() {
-        const data = { meta: { version: "1.0" }, actions: this.actions };
+        const name = this.name.trim() || "untitled";
+        this.name = name;
+        document.getElementById('project-name').value = name;
+        const data = { meta: { version: "1.0", name }, actions: this.actions };
         const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = "animation.json";
+        a.download = `${name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/[. ]+$/, "") || "untitled"}.json`;
         a.click();
         this.isDirty = false;
     },
@@ -490,6 +526,10 @@ const project = {
                 const data = JSON.parse(e.target.result);
                 if (data.actions) {
                     this.actions = data.actions;
+                    this.name = data.meta && typeof data.meta.name === 'string'
+                        ? data.meta.name
+                        : file.name.replace(/\.json$/i, '');
+                    document.getElementById('project-name').value = this.name;
                     this.actions.forEach(action => action.frames.forEach(frame => frame.shapes.forEach(shape => {
                         if (shape.open === undefined) shape.open = shape.closed === false;
                         delete shape.closed;
@@ -585,7 +625,7 @@ refreshUI() {
                 
                 if (editor.selectedShapes.length === 1) {
                     const s = editor.selectedShapes[0];
-                    document.getElementById('color-picker').value = rgbToHex(s.color.r, s.color.g, s.color.b);
+                    editor.syncColorInputs(s.color);
                     document.getElementById('alpha-slider').value = s.color.a;
                 }
                 
@@ -666,7 +706,12 @@ const editor = {
     },
 
     setColor(hex) {
-        const rgb = hexToRgb(hex);
+        const normalizedHex = normalizeHexColor(hex);
+        if (!normalizedHex) return;
+        const colorHex = `#${normalizedHex}`;
+        document.getElementById('color-picker').value = colorHex;
+        document.getElementById('color-hex').value = normalizedHex;
+        const rgb = hexToRgb(colorHex);
         const alpha = parseInt(document.getElementById('alpha-slider').value);
         const col = { r: rgb.r, g: rgb.g, b: rgb.b, a: alpha };
         
@@ -678,6 +723,15 @@ const editor = {
             this.render();
             project.refreshUI();
         }
+    },
+
+    syncColorInputs(color) {
+        const hex = typeof color === 'string'
+            ? normalizeHexColor(color)
+            : rgbToHex(color.r, color.g, color.b).slice(1);
+        if (!hex) return;
+        document.getElementById('color-picker').value = `#${hex}`;
+        document.getElementById('color-hex').value = hex;
     },
 
     setAlpha(val) {
@@ -692,6 +746,7 @@ const editor = {
 
     syncPropertyInputs() {
         const shape = this.selectedShapes.length === 1 ? this.selectedShapes[0] : null;
+        this.syncColorInputs(shape ? shape.color : document.getElementById('color-picker').value);
         const width = shape ? (shape.borderWidth ?? 0) : this.borderWidth;
         const color = shape ? (shape.borderColor || shape.color) : this.borderColor;
         document.getElementById('border-width').value = width;
@@ -736,14 +791,22 @@ const editor = {
     deleteSelectedShape() {
         if (this.selectedShapes.length === 0) return;
         const frame = project.getCurrentFrame();
+        const selectedIndices = this.selectedShapes
+            .map(shape => frame.shapes.indexOf(shape))
+            .filter(index => index !== -1);
+        if (selectedIndices.length === 0) return;
+        const nextListPosition = Math.min(...selectedIndices.map(index => frame.shapes.length - 1 - index));
         
         this.selectedShapes.forEach(shape => {
             const idx = frame.shapes.indexOf(shape);
             if (idx > -1) frame.shapes.splice(idx, 1);
         });
         
-        this.selectedShapes = [];
+        const nextIndex = frame.shapes.length - 1 - Math.min(nextListPosition, frame.shapes.length - 1);
+        this.selectedShapes = frame.shapes.length > 0 ? [frame.shapes[nextIndex]] : [];
+        this.selectedPointIndex = -1;
         project.isDirty = true;
+        this.syncPropertyInputs();
         this.render();
         project.refreshUI();
     },
@@ -796,7 +859,7 @@ const editor = {
         this.drawGrid();
         if (this.showRefScale) {
             ctx.save();
-            const topLeft = this.worldToScreen(-8, -16);
+            const topLeft = this.worldToScreen(-8, -8);
             const dim = 16 * this.camera.zoom;
             
             ctx.strokeStyle = "#00ff00"; // Bright green
@@ -999,7 +1062,7 @@ canvas.addEventListener('mousedown', (e) => {
                 
                 if (editor.selectedShapes.length === 1) {
                     const c = editor.selectedShapes[0].color;
-                    document.getElementById('color-picker').value = rgbToHex(c.r, c.g, c.b);
+                    editor.syncColorInputs(c);
                     document.getElementById('alpha-slider').value = c.a;
                 }
             }
@@ -1095,12 +1158,13 @@ canvas.addEventListener('wheel', (e) => {
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
-
     if (e.key === 'Escape') {
-        if (editor.tool === 'draw' && editor.drawingShape) { editor.drawingShape = null; editor.render(); }
-        else if (editor.tool === 'select') { editor.selectedShapes = []; editor.render(); project.refreshUI(); }
+        if (editor.drawingShape) editor.drawingShape = null;
+        editor.setTool('select');
+        return;
     }
+
+    if (e.target.tagName === 'INPUT') return;
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         if (editor.tool === 'draw' && editor.drawingShape) {
@@ -1176,6 +1240,10 @@ canvas.addEventListener('drop', (e) => {
 function hexToRgb(hex) {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 0, b: 0 };
+}
+function normalizeHexColor(hex) {
+    const value = hex.trim().replace(/^#/, '');
+    return /^[a-f\d]{6}$/i.test(value) ? value.toUpperCase() : null;
 }
 function rgbToHex(r, g, b) { return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1); }
 function pointInPoly(pt, vs) {
