@@ -263,6 +263,13 @@
                 <button class="tool-btn" id="btn-draw" onclick="editor.setTool('draw')">
                     <i class="fas fa-pen-nib"></i> Draw
                 </button>
+                <button class="tool-btn" id="btn-circle" onclick="editor.setTool('circle')">
+                    <i class="fas fa-circle"></i> Circle
+                </button>
+            </div>
+            <div class="row">
+                <label for="circle-sides">Circle sides</label>
+                <input type="number" id="circle-sides" min="3" max="256" step="1" value="32">
             </div>
             
             <div class="panel-header" style="margin: 10px -10px 10px -10px;">Properties</div>
@@ -675,6 +682,7 @@ const editor = {
     dragStart: { x: 0, y: 0 },
     mouseWorld: { x: 0, y: 0 },
     drawingShape: null,
+    circleStart: null,
     borderWidth: 0,
     borderColor: { r: 255, g: 255, b: 255 },
     open: false,
@@ -694,6 +702,10 @@ const editor = {
     },
 
     setTool(t) {
+        if (this.tool === 'circle' && t !== 'circle') {
+            this.drawingShape = null;
+            this.circleStart = null;
+        }
         this.tool = t;
         if (t === 'draw') {
             if (this.selectedShapes.length === 1) {
@@ -719,6 +731,38 @@ const editor = {
     updateButtonStates() {
         document.getElementById('btn-select').className = `tool-btn ${this.tool === 'select' ? 'active' : ''}`;
         document.getElementById('btn-draw').className = `tool-btn ${this.tool === 'draw' ? 'active' : ''}`;
+        document.getElementById('btn-circle').className = `tool-btn ${this.tool === 'circle' ? 'active' : ''}`;
+    },
+
+    createShapeFromProperties() {
+        const shape = new Shape();
+        const rgb = hexToRgb(document.getElementById('color-picker').value);
+        const borderRgb = hexToRgb(document.getElementById('border-color').value);
+        shape.color = {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+            a: parseInt(document.getElementById('alpha-slider').value)
+        };
+        shape.borderWidth = Math.max(0, Number(document.getElementById('border-width').value) || 0);
+        shape.borderColor = { r: borderRgb.r, g: borderRgb.g, b: borderRgb.b };
+        shape.open = document.getElementById('shape-open').checked;
+        return shape;
+    },
+
+    updateCircleShape(endPoint) {
+        if (!this.drawingShape || !this.circleStart) return;
+        const radius = Math.hypot(endPoint.x - this.circleStart.x, endPoint.y - this.circleStart.y);
+        const sidesInput = document.getElementById('circle-sides');
+        const sides = Math.min(256, Math.max(3, Math.floor(Number(sidesInput.value) || 32)));
+        sidesInput.value = sides;
+        this.drawingShape.points = Array.from({ length: sides }, (_, i) => {
+            const angle = (i / sides) * Math.PI * 2;
+            return {
+                x: this.circleStart.x + Math.cos(angle) * radius,
+                y: this.circleStart.y + Math.sin(angle) * radius
+            };
+        });
     },
 
     setColor(hex) {
@@ -910,6 +954,7 @@ const editor = {
                     const p = this.worldToScreen(pts[i].x, pts[i].y);
                     ctx.lineTo(p.x, p.y); ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
                 }
+                if (!this.drawingShape.open) ctx.closePath();
                 ctx.strokeStyle = "#00aaff"; ctx.lineWidth = 2; ctx.stroke();
                 const lastPt = pts[pts.length - 1];
                 const lastScreen = this.worldToScreen(lastPt.x, lastPt.y);
@@ -1101,16 +1146,8 @@ canvas.addEventListener('mousedown', (e) => {
     else if (editor.tool === 'draw') {
         if (e.button === 0) { 
             if (!editor.drawingShape) {
-                editor.drawingShape = new Shape();
+                editor.drawingShape = editor.createShapeFromProperties();
                 editor.drawingShape.points.push(snapPos);
-                const hex = document.getElementById('color-picker').value;
-                const rgb = hexToRgb(hex);
-                const alpha = parseInt(document.getElementById('alpha-slider').value);
-                editor.drawingShape.color = { r: rgb.r, g: rgb.g, b: rgb.b, a: alpha };
-                editor.drawingShape.borderWidth = Math.max(0, Number(document.getElementById('border-width').value) || 0);
-                const borderRgb = hexToRgb(document.getElementById('border-color').value);
-                editor.drawingShape.borderColor = { r: borderRgb.r, g: borderRgb.g, b: borderRgb.b };
-                editor.drawingShape.open = document.getElementById('shape-open').checked;
             } else {
                 const startPt = editor.drawingShape.points[0];
                 if (editor.drawingShape.points.length >= 2 && snapPos.x === startPt.x && snapPos.y === startPt.y) {
@@ -1126,6 +1163,12 @@ canvas.addEventListener('mousedown', (e) => {
             editor.render();
         } 
     }
+    else if (editor.tool === 'circle' && e.button === 0) {
+        editor.circleStart = snapPos;
+        editor.drawingShape = editor.createShapeFromProperties();
+        editor.updateCircleShape(snapPos);
+        editor.render();
+    }
 });
 
 
@@ -1133,6 +1176,12 @@ canvas.addEventListener('mousemove', (e) => {
     const pos = getMousePos(e);
     const worldPos = editor.screenToWorld(pos.x, pos.y);
     editor.mouseWorld = { x: editor.snap(worldPos.x), y: editor.snap(worldPos.y) };
+
+    if (editor.tool === 'circle' && editor.circleStart) {
+        editor.updateCircleShape(editor.mouseWorld);
+        editor.render();
+        return;
+    }
 
     if (editor.isPanning) {
         const dx = pos.x - editor.dragStart.x;
@@ -1163,7 +1212,22 @@ canvas.addEventListener('mousemove', (e) => {
     }
 });
 
-canvas.addEventListener('mouseup', () => {
+canvas.addEventListener('mouseup', (e) => {
+    if (editor.tool === 'circle' && editor.circleStart && e.button === 0) {
+        const pos = getMousePos(e);
+        const worldPos = editor.screenToWorld(pos.x, pos.y);
+        const endPoint = { x: editor.snap(worldPos.x), y: editor.snap(worldPos.y) };
+        editor.updateCircleShape(endPoint);
+        if (Math.hypot(endPoint.x - editor.circleStart.x, endPoint.y - editor.circleStart.y) > 0) {
+            project.getCurrentFrame().shapes.push(editor.drawingShape);
+            editor.selectedShapes = [editor.drawingShape];
+            project.isDirty = true;
+            project.refreshUI();
+        }
+        editor.drawingShape = null;
+        editor.circleStart = null;
+        editor.render();
+    }
     if (editor.isDragging) project.isDirty = true;
     editor.isDragging = false;
     editor.isPanning = false;
@@ -1183,6 +1247,7 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (editor.drawingShape) editor.drawingShape = null;
+        editor.circleStart = null;
         editor.setTool('select');
         return;
     }
