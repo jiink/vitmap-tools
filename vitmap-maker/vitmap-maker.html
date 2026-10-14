@@ -275,6 +275,11 @@
                     oninput="editor.setColor(this.value)">
             </div>
             <div class="row">
+                <label for="editor-background-color">Editor background</label>
+                <input type="color" id="editor-background-color" value="#121212"
+                    oninput="editor.setBackgroundColor(this.value)">
+            </div>
+            <div class="row">
                 <label>Alpha</label>
                 <input type="range" id="alpha-slider" min="0" max="255" value="255" oninput="editor.setAlpha(this.value)">
             </div>
@@ -296,6 +301,10 @@
             <div class="row">
                 <label>Size</label>
                 <input type="number" id="grid-size" value="16" onchange="editor.gridSize = parseInt(this.value); editor.render();">
+            </div>
+            <div class="row">
+                <input type="checkbox" id="grid-visible" checked onchange="editor.showGrid = this.checked; editor.render();">
+                <label for="grid-visible">Show Grid</label>
             </div>
             <div class="row">
                 <input type="checkbox" id="snap-check" checked onchange="editor.snapToGrid = this.checked">
@@ -642,6 +651,7 @@ const editor = {
     camera: { x: 0, y: 0, zoom: 20 },
     tool: 'select', 
     gridSize: 16,
+    showGrid: true,
     snapToGrid: true,
     showRefScale: false,
     overlayImage: null,
@@ -649,6 +659,7 @@ const editor = {
     overlayScale: 1.0,
     overlayX: 0,
     overlayY: 0,
+    backgroundColor: '#121212',
     
     currentFrameIndex: 0,
     fps: 12,
@@ -697,6 +708,11 @@ const editor = {
         }
         this.updateButtonStates();
         this.syncPropertyInputs();
+        this.render();
+    },
+
+    setBackgroundColor(color) {
+        this.backgroundColor = color;
         this.render();
     },
 
@@ -855,8 +871,7 @@ const editor = {
     clearOverlay() { this.overlayImage = null; this.render(); },
 
     render() {
-        ctx.fillStyle = "#121212"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        this.drawGrid();
+        ctx.fillStyle = this.backgroundColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
         if (this.showRefScale) {
             ctx.save();
             const topLeft = this.worldToScreen(-8, -8);
@@ -933,17 +948,25 @@ const editor = {
              ctx.fillStyle = "#fff"; ctx.font = "10px monospace";
              ctx.fillText(`${Math.round(this.mouseWorld.x)}, ${Math.round(this.mouseWorld.y)}`, s.x + 10, s.y);
         }
+        this.drawGrid();
     },
 
 
     drawGrid() {
+        if (!this.showGrid) return;
         const zoom = this.camera.zoom;
-        const offsetX = this.camera.x % zoom;
-        const offsetY = this.camera.y % zoom;
-        ctx.beginPath(); ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
-        for (let x = offsetX; x < canvas.width; x += zoom) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
-        for (let y = offsetY; y < canvas.height; y += zoom) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
-        ctx.stroke();
+        const stride = Math.max(1, Math.ceil(12 / zoom));
+        const spacing = zoom * stride;
+        const offsetX = this.camera.x % spacing;
+        const offsetY = this.camera.y % spacing;
+        ctx.beginPath(); ctx.fillStyle = "#444";
+        for (let x = offsetX; x < canvas.width; x += spacing) {
+            for (let y = offsetY; y < canvas.height; y += spacing) {
+                ctx.moveTo(x + 1.5, y);
+                ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+            }
+        }
+        ctx.fill();
         const origin = this.worldToScreen(0, 0);
         ctx.beginPath(); ctx.strokeStyle = "#444"; ctx.lineWidth = 2;
         ctx.moveTo(origin.x - 10, origin.y); ctx.lineTo(origin.x + 10, origin.y);
