@@ -168,6 +168,12 @@
         }
         
         .row { display: flex; gap: 5px; margin-bottom: 10px; align-items: center;}
+        #transform-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 5px;
+            margin-bottom: 10px;
+        }
         input[type="number"], input[type="text"] {
             background: #111;
             border: 1px solid #555;
@@ -301,6 +307,25 @@
             <div class="row">
                 <input type="checkbox" id="shape-open" onchange="editor.setOpen(this.checked)">
                 <label for="shape-open">Open (border only)</label>
+            </div>
+
+            <div class="panel-header" style="margin: 10px -10px 10px -10px;">Transform</div>
+            <div id="transform-controls">
+                <button onclick="editor.transformSelectedShapes('mirror-horizontal')" title="Mirror horizontally" aria-label="Mirror horizontally">
+                    <i class="fas fa-arrows-left-right"></i> Mirror H
+                </button>
+                <button onclick="editor.transformSelectedShapes('mirror-vertical')" title="Mirror vertically" aria-label="Mirror vertically">
+                    <i class="fas fa-arrows-up-down"></i> Mirror V
+                </button>
+                <button onclick="editor.transformSelectedShapes('rotate-left')" title="Rotate left 45 degrees" aria-label="Rotate left 45 degrees">
+                    <i class="fas fa-rotate-left"></i> Rotate Left 45°
+                </button>
+                <button onclick="editor.transformSelectedShapes('rotate-right')" title="Rotate right 45 degrees" aria-label="Rotate right 45 degrees">
+                    <i class="fas fa-rotate-right"></i> Rotate Right 45°
+                </button>
+                <button onclick="editor.snapSelectedShapesToGrid()" title="Snap all selected points to the nearest grid point" aria-label="Snap selection to grid">
+                    <i class="fas fa-magnet"></i> Snap to Grid
+                </button>
             </div>
 
             <div class="panel-header" style="margin: 10px -10px 10px -10px;">Grid</div>
@@ -847,6 +872,59 @@ const editor = {
         }
     },
 
+    transformSelectedShapes(transform) {
+        if (this.selectedShapes.length === 0) return;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        this.selectedShapes.forEach(shape => {
+            shape.points.forEach(point => {
+                minX = Math.min(minX, point.x);
+                maxX = Math.max(maxX, point.x);
+                minY = Math.min(minY, point.y);
+                maxY = Math.max(maxY, point.y);
+            });
+        });
+        if (minX === Infinity) return;
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const angle = transform === 'rotate-left'
+            ? -Math.PI / 4
+            : transform === 'rotate-right' ? Math.PI / 4 : 0;
+
+        this.selectedShapes.forEach(shape => {
+            shape.points.forEach(point => {
+                const x = point.x - centerX;
+                const y = point.y - centerY;
+                if (transform === 'mirror-horizontal') {
+                    point.x = centerX - x;
+                } else if (transform === 'mirror-vertical') {
+                    point.y = centerY - y;
+                } else {
+                    point.x = centerX + x * Math.cos(angle) - y * Math.sin(angle);
+                    point.y = centerY + x * Math.sin(angle) + y * Math.cos(angle);
+                }
+            });
+        });
+
+        project.isDirty = true;
+        this.render();
+    },
+
+    snapSelectedShapesToGrid() {
+        if (this.selectedShapes.length === 0) return;
+        this.selectedShapes.forEach(shape => {
+            shape.points.forEach(point => {
+                point.x = Math.round(point.x);
+                point.y = Math.round(point.y);
+            });
+        });
+        project.isDirty = true;
+        this.render();
+    },
+
 
     deleteSelectedShape() {
         if (this.selectedShapes.length === 0) return;
@@ -1246,7 +1324,16 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        if (editor.drawingShape) editor.drawingShape = null;
+        if (editor.tool === 'draw' && editor.drawingShape && editor.drawingShape.points.length > 0) {
+            const shape = editor.drawingShape;
+            project.getCurrentFrame().shapes.push(shape);
+            editor.selectedShapes = [shape];
+            editor.drawingShape = null;
+            project.isDirty = true;
+            project.refreshUI();
+        } else {
+            if (editor.drawingShape) editor.drawingShape = null;
+        }
         editor.circleStart = null;
         editor.setTool('select');
         return;
@@ -1263,6 +1350,14 @@ window.addEventListener('keydown', (e) => {
     }
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (editor.tool === 'draw' && editor.drawingShape) {
+            e.preventDefault();
+            editor.drawingShape.points.pop();
+            if (editor.drawingShape.points.length === 0) editor.drawingShape = null;
+            editor.render();
+            return;
+        }
+
         if (editor.tool === 'select') {
             if (editor.selectedPointIndex !== -1 && editor.selectedShapes.length === 1 && editor.selectedShapes[0].points.length > 3) {
                 editor.selectedShapes[0].points.splice(editor.selectedPointIndex, 1);
